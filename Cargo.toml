@@ -65,7 +65,7 @@ home = "0.5.12"
 http = "1.4.0"
 http-auth = { version = "0.1.10", default-features = false }
 ignore = "0.4.25"
-im-rc = "15.1.0"
+imbl = "7.0.2"
 indexmap = "2.13.0"
 itertools = "0.15.0"
 jiff = { version = "0.2.23", default-features = false, features = [ "std" ] }
@@ -192,7 +192,7 @@ home.workspace = true
 http.workspace = true
 http-auth.workspace = true
 ignore.workspace = true
-im-rc.workspace = true
+imbl.workspace = true
 indexmap.workspace = true
 itertools.workspace = true
 jiff = { workspace = true, features = ["serde", "std"] }

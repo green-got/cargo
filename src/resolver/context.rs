@@ -8,6 +8,7 @@ use crate::util::data_structures::HashSet;
 use crate::util::interning::{INTERNED_DEFAULT, InternedString};
 use crate::workspace::{Dependency, PackageId, Registry, Summary};
 use anyhow::format_err;
+use imbl::shared_ptr::RcK;
 use std::collections::BTreeSet;
 use tracing::debug;
 
@@ -20,13 +21,14 @@ pub struct ResolverContext {
     pub age: ContextAge,
     pub activations: Activations,
     /// list the features that are activated for each package
-    pub resolve_features: im_rc::HashMap<PackageId, FeaturesSet, rustc_hash::FxBuildHasher>,
+    pub resolve_features:
+        imbl::GenericHashMap<PackageId, FeaturesSet, rustc_hash::FxBuildHasher, RcK>,
     /// get the package that will be linking to a native library by its links attribute
-    pub links: im_rc::HashMap<InternedString, PackageId, rustc_hash::FxBuildHasher>,
+    pub links: imbl::GenericHashMap<InternedString, PackageId, rustc_hash::FxBuildHasher, RcK>,
 
     /// a way to look up for a package in activations what packages required it
     /// and all of the exact deps that it fulfilled.
-    pub parents: Graph<PackageId, im_rc::HashSet<Dependency, rustc_hash::FxBuildHasher>>,
+    pub parents: Graph<PackageId, imbl::GenericHashSet<Dependency, rustc_hash::FxBuildHasher, RcK>>,
 }
 
 /// When backtracking it can be useful to know how far back to go.
@@ -41,16 +43,16 @@ pub type ContextAge = usize;
 /// semver compatible version of each crate.
 /// This all so stores the `ContextAge`.
 pub type Activations =
-    im_rc::HashMap<ActivationsKey, (Summary, ContextAge), rustc_hash::FxBuildHasher>;
+    imbl::GenericHashMap<ActivationsKey, (Summary, ContextAge), rustc_hash::FxBuildHasher, RcK>;
 
 impl ResolverContext {
     pub fn new() -> ResolverContext {
         ResolverContext {
             age: 0,
-            resolve_features: im_rc::HashMap::default(),
-            links: im_rc::HashMap::default(),
+            resolve_features: imbl::GenericHashMap::default(),
+            links: imbl::GenericHashMap::default(),
             parents: Graph::new(),
-            activations: im_rc::HashMap::default(),
+            activations: imbl::GenericHashMap::default(),
         }
     }
 
@@ -70,14 +72,14 @@ impl ResolverContext {
         let id = summary.package_id();
         let age: ContextAge = self.age;
         match self.activations.entry(id.as_activations_key()) {
-            im_rc::hashmap::Entry::Occupied(o) => {
+            imbl::hashmap::Entry::Occupied(o) => {
                 debug_assert_eq!(
                     &o.get().0,
                     summary,
                     "cargo does not allow two semver compatible versions"
                 );
             }
-            im_rc::hashmap::Entry::Vacant(v) => {
+            imbl::hashmap::Entry::Vacant(v) => {
                 if let Some(link) = summary.links() {
                     if self.links.insert(link, id).is_some() {
                         return Err(format_err!(

@@ -1,26 +1,29 @@
+use imbl::shared_ptr::RcK;
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
 pub struct Graph<N: Clone, E: Clone> {
-    nodes: im_rc::OrdMap<N, im_rc::OrdMap<N, E>>,
+    nodes: imbl::GenericOrdMap<N, imbl::GenericOrdMap<N, E, RcK>, RcK>,
 }
 
 impl<N: Eq + Ord + Clone, E: Default + Clone> Graph<N, E> {
     pub fn new() -> Graph<N, E> {
         Graph {
-            nodes: im_rc::OrdMap::new(),
+            nodes: imbl::GenericOrdMap::new(),
         }
     }
 
     pub fn add(&mut self, node: N) {
-        self.nodes.entry(node).or_insert_with(im_rc::OrdMap::new);
+        self.nodes
+            .entry(node)
+            .or_insert_with(imbl::GenericOrdMap::new);
     }
 
     pub fn link(&mut self, node: N, child: N) -> &mut E {
         self.nodes
             .entry(node)
-            .or_insert_with(im_rc::OrdMap::new)
+            .or_insert_with(imbl::GenericOrdMap::new)
             .entry(child)
             .or_default()
     }
