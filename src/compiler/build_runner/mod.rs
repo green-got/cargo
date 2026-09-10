@@ -40,6 +40,7 @@ pub use self::compilation_files::{Metadata, OutputFile, UnitHash};
 pub struct BuildRunner<'a, 'gctx> {
     /// Mostly static information about the build task.
     pub bcx: &'a BuildContext<'a, 'gctx>,
+    pub(crate) cache_probe_root: Option<PathBuf>,
     /// A large collection of information about the result of the entire compilation.
     pub compilation: Compilation<'gctx>,
     /// Output from build scripts, updated after each build script runs.
@@ -118,6 +119,7 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
 
         Ok(Self {
             bcx,
+            cache_probe_root: None,
             compilation: Compilation::new(bcx)?,
             build_script_outputs: Arc::new(Mutex::new(BuildScriptOutputs::default())),
             fingerprints: HashMap::default(),
@@ -136,6 +138,53 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
             unused_dep_state: UnusedDepState::new(bcx),
             lock_manager: Arc::new(LockManager::new()),
         })
+    }
+
+    pub(crate) fn probe_caches(
+        bcx: &'a BuildContext<'a, 'gctx>,
+        candidates: &[PathBuf],
+        deadline: std::time::Instant,
+    ) -> CargoResult<Vec<crate::cache_probe::CandidateScore>> {
+        let mut mtime_cache = HashMap::default();
+        let mut checksum_cache = HashMap::default();
+        let lto = super::lto::generate(bcx)?;
+        let mut scores = Vec::new();
+        for path in candidates {
+            anyhow::ensure!(path.is_absolute(), "invalid cache candidate");
+            anyhow::ensure!(
+                std::time::Instant::now() < deadline,
+                "cache probe deadline exceeded"
+            );
+            let mut runner = Self::new(bcx)?;
+            runner.cache_probe_root = Some(path.clone());
+            runner.mtime_cache = std::mem::take(&mut mtime_cache);
+            runner.checksum_cache = std::mem::take(&mut checksum_cache);
+            runner.lto = lto.clone();
+            runner.prepare_units()?;
+            custom_build::build_map(&mut runner)?;
+            runner.compute_metadata_for_doc_units();
+            let mut fresh_units = 0;
+            let mut total_units = 0;
+            for unit in bcx.unit_graph.keys() {
+                anyhow::ensure!(
+                    std::time::Instant::now() < deadline,
+                    "cache probe deadline exceeded"
+                );
+                if unit.mode.is_doc_test() {
+                    continue;
+                }
+                total_units += 1;
+                fresh_units +=
+                    usize::from(super::fingerprint::probe_target(&mut runner, unit)?.is_none());
+            }
+            scores.push(crate::cache_probe::CandidateScore {
+                fresh_units,
+                total_units,
+            });
+            mtime_cache = runner.mtime_cache;
+            checksum_cache = runner.checksum_cache;
+        }
+        Ok(scores)
     }
 
     /// Dry-run the compilation without actually running it.
@@ -432,17 +481,24 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
             | UserIntent::Doctest
             | UserIntent::Bench => true,
         };
-        let host_layout =
-            Layout::new(self.bcx.ws, None, &dest, must_take_artifact_dir_lock, false)?;
+        let host_layout = Layout::new_with_cache_root(
+            self.bcx.ws,
+            None,
+            &dest,
+            must_take_artifact_dir_lock,
+            false,
+            self.cache_probe_root.as_deref(),
+        )?;
         let mut targets = HashMap::default();
         for kind in self.bcx.all_kinds.iter() {
             if let CompileKind::Target(target) = *kind {
-                let layout = Layout::new(
+                let layout = Layout::new_with_cache_root(
                     self.bcx.ws,
                     Some(target),
                     &dest,
                     must_take_artifact_dir_lock,
                     false,
+                    self.cache_probe_root.as_deref(),
                 )?;
                 targets.insert(target, layout);
             }

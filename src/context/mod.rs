@@ -968,6 +968,16 @@ impl GlobalContext {
         self.env = Env::from_map(env);
     }
 
+    /// Disable rustc-info cache writes before evaluating a target directory that does not exist yet.
+    pub fn disable_rustc_info_cache(&mut self) {
+        self.cache_rustc_info = false;
+    }
+
+    /// Preserve native Cargo's identity when the embedding executable is itself invoked as `cargo`.
+    pub fn set_cargo_exe(&mut self, executable: PathBuf) {
+        self.cargo_exe = OnceLock::from(executable);
+    }
+
     /// Returns all environment variables as an iterator,
     /// keeping only entries where both the key and value are valid UTF-8.
     pub(crate) fn env(&self) -> impl Iterator<Item = (&str, &str)> {

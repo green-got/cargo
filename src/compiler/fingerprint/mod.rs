@@ -2010,7 +2010,30 @@ pub fn dep_info_loc(build_runner: &mut BuildRunner<'_, '_>, unit: &Unit) -> Path
 /// Returns an absolute path that build directory.
 /// All paths are rewritten to be relative to this.
 fn build_root(build_runner: &BuildRunner<'_, '_>) -> PathBuf {
-    build_runner.bcx.ws.build_dir().into_path_unlocked()
+    build_runner
+        .cache_probe_root
+        .clone()
+        .unwrap_or_else(|| build_runner.bcx.ws.build_dir().into_path_unlocked())
+}
+
+pub(crate) fn probe_target(
+    build_runner: &mut BuildRunner<'_, '_>,
+    unit: &Unit,
+) -> CargoResult<Option<DirtyReason>> {
+    let loc = build_runner.files().fingerprint_file_path(unit, "");
+    let fingerprint = calculate(build_runner, unit)?;
+    Ok(
+        match compare_old_fingerprint(
+            unit,
+            &loc,
+            &fingerprint,
+            false,
+            build_runner.bcx.build_config.force_rebuild,
+        ) {
+            FingerprintComparison::Fresh => None,
+            FingerprintComparison::Dirty { reason } => Some(reason),
+        },
+    )
 }
 
 /// Reads the value from the old fingerprint hash file and compare.

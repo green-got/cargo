@@ -5,6 +5,9 @@ use std::path::Path;
 use std::process::Command;
 
 fn main() {
+    // The embedded probe must accept the pinned native nightly's unstable configuration.
+    println!("cargo:rustc-env=CFG_RELEASE_CHANNEL=nightly");
+    println!("cargo:rustc-env=CFG_RELEASE=1.100.0-nightly");
     commit_info();
     compress_man();
     windows_manifest();
