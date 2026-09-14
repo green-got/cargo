@@ -2016,24 +2016,16 @@ fn build_root(build_runner: &BuildRunner<'_, '_>) -> PathBuf {
         .unwrap_or_else(|| build_runner.bcx.ws.build_dir().into_path_unlocked())
 }
 
-pub(crate) fn probe_target(
+pub(crate) fn probe_target_is_fresh(
     build_runner: &mut BuildRunner<'_, '_>,
     unit: &Unit,
-) -> CargoResult<Option<DirtyReason>> {
+) -> CargoResult<bool> {
     let loc = build_runner.files().fingerprint_file_path(unit, "");
     let fingerprint = calculate(build_runner, unit)?;
-    Ok(
-        match compare_old_fingerprint(
-            unit,
-            &loc,
-            &fingerprint,
-            false,
-            build_runner.bcx.build_config.force_rebuild,
-        ) {
-            FingerprintComparison::Fresh => None,
-            FingerprintComparison::Dirty { reason } => Some(reason),
-        },
-    )
+    Ok(!build_runner.bcx.build_config.force_rebuild
+        && fingerprint.fs_status.up_to_date()
+        && paths::read(&loc)
+            .is_ok_and(|old_fingerprint| old_fingerprint == util::to_hex(fingerprint.hash_u64())))
 }
 
 /// Reads the value from the old fingerprint hash file and compare.

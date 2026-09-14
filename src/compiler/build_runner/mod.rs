@@ -148,6 +148,7 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
         let mut mtime_cache = HashMap::default();
         let mut checksum_cache = HashMap::default();
         let lto = super::lto::generate(bcx)?;
+        let mut metas = None;
         let mut scores = Vec::new();
         for path in candidates {
             anyhow::ensure!(path.is_absolute(), "invalid cache candidate");
@@ -160,7 +161,7 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
             runner.mtime_cache = std::mem::take(&mut mtime_cache);
             runner.checksum_cache = std::mem::take(&mut checksum_cache);
             runner.lto = lto.clone();
-            runner.prepare_units()?;
+            runner.prepare_units_with_metadata(metas.take())?;
             custom_build::build_map(&mut runner)?;
             runner.compute_metadata_for_doc_units();
             let mut fresh_units = 0;
@@ -174,13 +175,16 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
                     continue;
                 }
                 total_units += 1;
-                fresh_units +=
-                    usize::from(super::fingerprint::probe_target(&mut runner, unit)?.is_none());
+                fresh_units += usize::from(super::fingerprint::probe_target_is_fresh(
+                    &mut runner,
+                    unit,
+                )?);
             }
             scores.push(crate::cache_probe::CandidateScore {
                 fresh_units,
                 total_units,
             });
+            metas = Some(std::mem::take(&mut runner.files.as_mut().unwrap().metas));
             mtime_cache = runner.mtime_cache;
             checksum_cache = runner.checksum_cache;
         }
@@ -464,6 +468,13 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
 
     #[tracing::instrument(skip_all)]
     pub fn prepare_units(&mut self) -> CargoResult<()> {
+        self.prepare_units_with_metadata(None)
+    }
+
+    fn prepare_units_with_metadata(
+        &mut self,
+        metas: Option<HashMap<Unit, Metadata>>,
+    ) -> CargoResult<()> {
         let dest = self.bcx.profiles.get_dir_name();
         // We try to only lock the artifact-dir if we need to.
         // For example, `cargo check` does not write any files to the artifact-dir so we don't need
@@ -511,7 +522,7 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
 
         self.record_units_requiring_metadata();
 
-        let files = CompilationFiles::new(self, host_layout, targets);
+        let files = CompilationFiles::new(self, host_layout, targets, metas);
         self.files = Some(files);
         Ok(())
     }
