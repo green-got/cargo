@@ -237,9 +237,31 @@ impl Layout {
         must_take_artifact_dir_lock: bool,
         must_take_build_dir_lock_exclusively: bool,
     ) -> CargoResult<Layout> {
+        Self::new_with_cache_root(
+            ws,
+            target,
+            dest,
+            must_take_artifact_dir_lock,
+            must_take_build_dir_lock_exclusively,
+            None,
+        )
+    }
+
+    pub(crate) fn new_with_cache_root(
+        ws: &Workspace<'_>,
+        target: Option<CompileTarget>,
+        dest: &str,
+        must_take_artifact_dir_lock: bool,
+        must_take_build_dir_lock_exclusively: bool,
+        cache_root: Option<&std::path::Path>,
+    ) -> CargoResult<Layout> {
         let is_new_layout = ws.gctx().cli_unstable().build_dir_new_layout;
-        let mut root = ws.target_dir();
-        let mut build_root = ws.build_dir();
+        let mut root = cache_root
+            .map(|p| crate::util::Filesystem::new(p.to_path_buf()))
+            .unwrap_or_else(|| ws.target_dir());
+        let mut build_root = cache_root
+            .map(|p| crate::util::Filesystem::new(p.to_path_buf()))
+            .unwrap_or_else(|| ws.build_dir());
         if let Some(target) = target {
             root.push(target.short_name());
             build_root.push(target.short_name());
@@ -250,16 +272,20 @@ impl Layout {
         // here. Use this opportunity to exclude it from backups as well if the
         // system supports it since this is a freshly created folder.
         //
-        paths::create_dir_all_excluded_from_backups_atomic(root.as_path_unlocked())?;
-        if root != build_root {
-            paths::create_dir_all_excluded_from_backups_atomic(build_root.as_path_unlocked())?;
+        if cache_root.is_none() {
+            paths::create_dir_all_excluded_from_backups_atomic(root.as_path_unlocked())?;
+            if root != build_root {
+                paths::create_dir_all_excluded_from_backups_atomic(build_root.as_path_unlocked())?;
+            }
+
+            // Now that the excluded from backups target root is created we can create the
+            // actual destination (sub)subdirectory.
+            paths::create_dir_all(dest.as_path_unlocked())?;
         }
 
-        // Now that the excluded from backups target root is created we can create the
-        // actual destination (sub)subdirectory.
-        paths::create_dir_all(dest.as_path_unlocked())?;
-
-        let build_dir_lock = if is_on_nfs_mount(build_root.as_path_unlocked()) {
+        let build_dir_lock = if cache_root.is_some()
+            || is_on_nfs_mount(build_root.as_path_unlocked())
+        {
             None
         } else {
             if ws.gctx().cli_unstable().fine_grain_locking && !must_take_build_dir_lock_exclusively
@@ -285,7 +311,7 @@ impl Layout {
         // We take a shared lock on `.cargo-lock` to make sure we don't run currently with
         // older versions of Cargo (including tools that use Cargo as a library) that don't support
         // `.cargo-build-lock`.
-        let lock = if is_on_nfs_mount(root.as_path_unlocked()) {
+        let lock = if cache_root.is_some() || is_on_nfs_mount(root.as_path_unlocked()) {
             None
         } else {
             Some(dest.open_ro_shared_create(".cargo-lock", ws.gctx(), "artifact directory")?)
@@ -295,15 +321,16 @@ impl Layout {
             // For now we don't do any more finer-grained locking on the artifact
             // directory, so just lock the entire thing for the duration of this
             // compile.
-            let artifact_dir_lock = if is_on_nfs_mount(root.as_path_unlocked()) {
-                None
-            } else {
-                Some(dest.open_rw_exclusive_create(
-                    ".cargo-artifact-lock",
-                    ws.gctx(),
-                    "artifact directory",
-                )?)
-            };
+            let artifact_dir_lock =
+                if cache_root.is_some() || is_on_nfs_mount(root.as_path_unlocked()) {
+                    None
+                } else {
+                    Some(dest.open_rw_exclusive_create(
+                        ".cargo-artifact-lock",
+                        ws.gctx(),
+                        "artifact directory",
+                    )?)
+                };
             let root = root.into_path_unlocked();
             let dest = dest.into_path_unlocked();
             Some(ArtifactDirLayout {

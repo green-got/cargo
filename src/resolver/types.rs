@@ -279,14 +279,14 @@ pub struct RemainingDeps {
     /// the data is augmented by the insertion time.
     /// This insures that no two items will cmp eq.
     /// Forcing the `OrdSet` into a multi set.
-    data: im_rc::OrdSet<(DepsFrame, u32)>,
+    data: imbl::GenericOrdSet<(DepsFrame, u32), imbl::shared_ptr::RcK>,
 }
 
 impl RemainingDeps {
     pub fn new() -> RemainingDeps {
         RemainingDeps {
             time: 0,
-            data: im_rc::OrdSet::new(),
+            data: imbl::GenericOrdSet::new(),
         }
     }
     pub fn push(&mut self, x: DepsFrame) {

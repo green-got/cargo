@@ -22,6 +22,11 @@ fn case() {
 
     let project = Project::from_template(current_dir!().join("in"));
     let project_root = project.root();
+    std::fs::rename(
+        project_root.join("Cargo.toml.fixture"),
+        project_root.join("Cargo.toml"),
+    )
+    .unwrap();
     let cwd = &project_root;
 
     snapbox::cmd::Command::cargo_ui()
@@ -33,5 +38,10 @@ fn case() {
         .stdout_eq(str![""])
         .stderr_eq(file!["stderr.term.svg"]);
 
+    std::fs::rename(
+        project_root.join("Cargo.toml"),
+        project_root.join("Cargo.toml.fixture"),
+    )
+    .unwrap();
     assert_ui().subset_matches(current_dir!().join("out"), &project_root);
 }

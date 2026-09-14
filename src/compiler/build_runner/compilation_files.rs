@@ -133,7 +133,7 @@ pub struct CompilationFiles<'a, 'gctx> {
     roots: Vec<Unit>,
     ws: &'a Workspace<'gctx>,
     /// Metadata hash to use for each unit.
-    metas: HashMap<Unit, Metadata>,
+    pub(super) metas: HashMap<Unit, Metadata>,
     /// For each Unit, a list all files produced.
     outputs: HashMap<Unit, OnceCell<Arc<Vec<OutputFile>>>>,
 }
@@ -167,11 +167,15 @@ impl<'a, 'gctx: 'a> CompilationFiles<'a, 'gctx> {
         build_runner: &BuildRunner<'a, 'gctx>,
         host: Layout,
         target: HashMap<CompileTarget, Layout>,
+        metas: Option<HashMap<Unit, Metadata>>,
     ) -> CompilationFiles<'a, 'gctx> {
-        let mut metas = HashMap::default();
-        for unit in &build_runner.bcx.roots {
-            metadata_of(unit, build_runner, &mut metas);
-        }
+        let metas = metas.unwrap_or_else(|| {
+            let mut metas = HashMap::default();
+            for unit in &build_runner.bcx.roots {
+                metadata_of(unit, build_runner, &mut metas);
+            }
+            metas
+        });
         let outputs = metas
             .keys()
             .cloned()

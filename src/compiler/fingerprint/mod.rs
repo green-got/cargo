@@ -2010,7 +2010,84 @@ pub fn dep_info_loc(build_runner: &mut BuildRunner<'_, '_>, unit: &Unit) -> Path
 /// Returns an absolute path that build directory.
 /// All paths are rewritten to be relative to this.
 fn build_root(build_runner: &BuildRunner<'_, '_>) -> PathBuf {
-    build_runner.bcx.ws.build_dir().into_path_unlocked()
+    build_runner
+        .cache_probe_root
+        .clone()
+        .unwrap_or_else(|| build_runner.bcx.ws.build_dir().into_path_unlocked())
+}
+
+pub(crate) fn probe_target_is_fresh(
+    build_runner: &mut BuildRunner<'_, '_>,
+    unit: &Unit,
+) -> CargoResult<bool> {
+    let loc = build_runner.files().fingerprint_file_path(unit, "");
+    let fingerprint = calculate(build_runner, unit)?;
+    Ok(probe_fingerprint_is_fresh(
+        &loc,
+        &fingerprint,
+        build_runner.bcx.build_config.force_rebuild,
+    ))
+}
+
+fn probe_fingerprint_is_fresh(
+    old_hash_path: &Path,
+    fingerprint: &Fingerprint,
+    forced: bool,
+) -> bool {
+    !forced
+        && fingerprint.fs_status.up_to_date()
+        && paths::read(old_hash_path)
+            .is_ok_and(|old_fingerprint| old_fingerprint == util::to_hex(fingerprint.hash_u64()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn probe_freshness_matches_normal_fingerprint_comparison() {
+        let temp = tempfile::tempdir().unwrap();
+        let old_hash_path = temp.path().join("fingerprint");
+        let mut old = Fingerprint::new();
+        old.rustc = 1;
+        write_fingerprint(&old_hash_path, &old).unwrap();
+
+        let mut fresh = Fingerprint::new();
+        fresh.rustc = 1;
+        fresh.fs_status = FsStatus::UpToDate {
+            mtimes: HashMap::default(),
+        };
+        assert_comparisons_match(&old_hash_path, &fresh, true);
+
+        let mut stale_filesystem = Fingerprint::new();
+        stale_filesystem.rustc = 1;
+        assert_comparisons_match(&old_hash_path, &stale_filesystem, false);
+
+        let mut changed = Fingerprint::new();
+        changed.rustc = 1;
+        changed.target = 1;
+        changed.fs_status = FsStatus::UpToDate {
+            mtimes: HashMap::default(),
+        };
+        assert_comparisons_match(&old_hash_path, &changed, false);
+
+        assert!(!probe_fingerprint_is_fresh(&old_hash_path, &fresh, true));
+
+        std::fs::remove_file(&old_hash_path).unwrap();
+        assert_comparisons_match(&old_hash_path, &fresh, false);
+    }
+
+    fn assert_comparisons_match(old_hash_path: &Path, fingerprint: &Fingerprint, expected: bool) {
+        let normal = matches!(
+            _compare_old_fingerprint(old_hash_path, fingerprint),
+            Ok(FingerprintComparison::Fresh)
+        );
+        assert_eq!(
+            probe_fingerprint_is_fresh(old_hash_path, fingerprint, false),
+            normal
+        );
+        assert_eq!(normal, expected);
+    }
 }
 
 /// Reads the value from the old fingerprint hash file and compare.

@@ -246,3 +246,5 @@ fn _display_error(err: &Error, shell: &mut Shell, as_err: bool) {
         }
     }
 }
+
+pub mod cache_probe;
