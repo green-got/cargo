@@ -20,6 +20,8 @@ pub struct CandidateScore {
 
 /// Candidates and sources must remain stable until the caller snapshots the winner.
 /// The deadline is cooperative; graph resolution and individual filesystem calls can exceed it.
+/// When it expires, the probe returns the fully scored candidate prefix, or an error if none
+/// completed. A candidate interrupted during scoring is excluded from the result.
 /// Package resolution requires an existing lockfile and cached dependencies.
 pub fn probe(
     ws: &Workspace<'_>,

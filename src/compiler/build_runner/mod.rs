@@ -3,6 +3,7 @@
 use crate::util::data_structures::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use crate::compiler::compilation::{self, UnitOutput};
 use crate::compiler::locking::LockManager;
@@ -143,7 +144,7 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
     pub(crate) fn probe_caches(
         bcx: &'a BuildContext<'a, 'gctx>,
         candidates: &[PathBuf],
-        deadline: std::time::Instant,
+        deadline: Instant,
     ) -> CargoResult<Vec<crate::cache_probe::CandidateScore>> {
         let mut mtime_cache = HashMap::default();
         let mut checksum_cache = HashMap::default();
@@ -152,10 +153,9 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
         let mut scores = Vec::new();
         for path in candidates {
             anyhow::ensure!(path.is_absolute(), "invalid cache candidate");
-            anyhow::ensure!(
-                std::time::Instant::now() < deadline,
-                "cache probe deadline exceeded"
-            );
+            if should_stop_cache_probe(Instant::now(), deadline, scores.len(), candidates.len())? {
+                return Ok(scores);
+            }
             let mut runner = Self::new(bcx)?;
             runner.cache_probe_root = Some(path.clone());
             runner.mtime_cache = std::mem::take(&mut mtime_cache);
@@ -167,10 +167,14 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
             let mut fresh_units = 0;
             let mut total_units = 0;
             for unit in bcx.unit_graph.keys() {
-                anyhow::ensure!(
-                    std::time::Instant::now() < deadline,
-                    "cache probe deadline exceeded"
-                );
+                if should_stop_cache_probe(
+                    Instant::now(),
+                    deadline,
+                    scores.len(),
+                    candidates.len(),
+                )? {
+                    return Ok(scores);
+                }
                 if unit.mode.is_doc_test() {
                     continue;
                 }
@@ -881,5 +885,43 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
             self.metadata_for_doc_units
                 .insert(unit.clone(), self.files().metadata(metadata_unit));
         }
+    }
+}
+
+fn should_stop_cache_probe(
+    now: Instant,
+    deadline: Instant,
+    completed_candidates: usize,
+    total_candidates: usize,
+) -> CargoResult<bool> {
+    if now < deadline {
+        return Ok(false);
+    }
+    if completed_candidates == 0 {
+        bail!("cache probe deadline exceeded");
+    }
+    tracing::info!(
+        completed_candidates,
+        total_candidates,
+        "cache probe deadline exceeded; returning completed candidate prefix"
+    );
+    Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn cache_probe_deadline_preserves_completed_prefix() {
+        let now = Instant::now();
+        let deadline = now + Duration::from_secs(1);
+        assert!(!should_stop_cache_probe(now, deadline, 0, 3).unwrap());
+
+        let error = should_stop_cache_probe(now, now, 0, 3).unwrap_err();
+        assert_eq!(error.to_string(), "cache probe deadline exceeded");
+
+        assert!(should_stop_cache_probe(now, now, 2, 3).unwrap());
     }
 }
