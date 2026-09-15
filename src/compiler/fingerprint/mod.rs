@@ -978,7 +978,7 @@ impl LocalFingerprint {
                         if let Some(value) = gctx.env_config()?.get(key) {
                             value.to_str()
                         } else {
-                            gctx.get_env(key).ok()
+                            gctx.get_env_os(key).and_then(|value| value.to_str())
                         }
                     };
                     if current == previous.as_deref() {
@@ -1663,8 +1663,8 @@ fn calculate_normal(
                 build_runner
                     .bcx
                     .gctx
-                    .get_env(super::trim_paths::WS_REMAP_ENV)
-                    .ok()
+                    .get_env_os(super::trim_paths::WS_REMAP_ENV)
+                    .and_then(|value| value.to_str())
                     .filter(|prefix| !prefix.is_empty())
             }),
     ));
@@ -2020,24 +2020,19 @@ pub(crate) fn probe_target_is_fresh(
     build_runner: &mut BuildRunner<'_, '_>,
     unit: &Unit,
 ) -> CargoResult<bool> {
+    if build_runner.bcx.build_config.force_rebuild {
+        return Ok(false);
+    }
     let loc = build_runner.files().fingerprint_file_path(unit, "");
+    let Ok(old_hash) = std::fs::read_to_string(&loc) else {
+        return Ok(false);
+    };
     let fingerprint = calculate(build_runner, unit)?;
-    Ok(probe_fingerprint_is_fresh(
-        &loc,
-        &fingerprint,
-        build_runner.bcx.build_config.force_rebuild,
-    ))
+    Ok(probe_fingerprint_is_fresh(&old_hash, &fingerprint))
 }
 
-fn probe_fingerprint_is_fresh(
-    old_hash_path: &Path,
-    fingerprint: &Fingerprint,
-    forced: bool,
-) -> bool {
-    !forced
-        && fingerprint.fs_status.up_to_date()
-        && paths::read(old_hash_path)
-            .is_ok_and(|old_fingerprint| old_fingerprint == util::to_hex(fingerprint.hash_u64()))
+fn probe_fingerprint_is_fresh(old_hash: &str, fingerprint: &Fingerprint) -> bool {
+    fingerprint.fs_status.up_to_date() && old_hash == util::to_hex(fingerprint.hash_u64())
 }
 
 #[cfg(test)]
@@ -2071,8 +2066,6 @@ mod tests {
         };
         assert_comparisons_match(&old_hash_path, &changed, false);
 
-        assert!(!probe_fingerprint_is_fresh(&old_hash_path, &fresh, true));
-
         std::fs::remove_file(&old_hash_path).unwrap();
         assert_comparisons_match(&old_hash_path, &fresh, false);
     }
@@ -2082,10 +2075,9 @@ mod tests {
             _compare_old_fingerprint(old_hash_path, fingerprint),
             Ok(FingerprintComparison::Fresh)
         );
-        assert_eq!(
-            probe_fingerprint_is_fresh(old_hash_path, fingerprint, false),
-            normal
-        );
+        let probe = std::fs::read_to_string(old_hash_path)
+            .is_ok_and(|old_hash| probe_fingerprint_is_fresh(&old_hash, fingerprint));
+        assert_eq!(probe, normal);
         assert_eq!(normal, expected);
     }
 }

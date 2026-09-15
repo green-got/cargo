@@ -476,7 +476,7 @@ pub fn parse_dep_info(
     build_root: &Path,
     dep_info: &Path,
 ) -> CargoResult<Option<RustcDepInfo>> {
-    let Ok(data) = paths::read_bytes(dep_info) else {
+    let Ok(data) = std::fs::read(dep_info) else {
         return Ok(None);
     };
     let Some(info) = EncodedDepInfo::parse(&data) else {
