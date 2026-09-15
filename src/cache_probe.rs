@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 /// Native Cargo revision whose fingerprint implementation this probe uses.
-pub const CARGO_COMMIT: &str = "b2e9d5f9db3fb1c454ab84f10c16508984a266e2";
+pub const CARGO_COMMIT: &str = "7941be6fb416b4cd9666aef7b858dfea25587a8c";
 
 #[derive(Debug, Clone, Copy)]
 pub struct CandidateScore {

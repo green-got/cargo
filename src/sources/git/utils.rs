@@ -1354,9 +1354,15 @@ https://doc.rust-lang.org/cargo/reference/config.html#netgit-fetch-with-cli"
         patch: 0,
     };
     network::retry::with_retry(gctx, || {
-        cmd.exec().map_err(|error| {
+        cmd.exec().map_err(|_error| {
             let spurious = git_version < min_version_max_retries;
-            GitCliError::new(error)
+            let pr_hint = note_github_pull_request(url).unwrap_or_default();
+            let with_depth = if let gix::remote::fetch::Shallow::DepthAtRemote(depth) = shallow {
+                format!(" with depth={depth}")
+            } else {
+                "".to_owned()
+            };
+            GitCliError::new(anyhow::format_err!("`git fetch` failed for {url}{with_depth}{pr_hint}"))
                 .spurious(spurious)
                 .workaround(
                     "help: re-try with `net.git-fetch-with-cli = false` to see if it resolves the problem
@@ -1868,10 +1874,9 @@ pub(crate) fn note_github_pull_request(url: &str) -> Option<String> {
             let rev = format!("refs/pull/{pr_number}/head");
             return Some(format!(
                 concat!(
-                    "\n\nnote: GitHub url {} is not a repository. \n",
-                    "help: Replace the dependency with \n",
-                    "       `git = \"{}\" rev = \"{}\"` \n",
-                    "   to specify pull requests as dependencies' revision."
+                    "\n\nnote: GitHub url {} is not a repository\n",
+                    "help: to specify a pull request as a dependency, replace the dependency with:\n",
+                    "       `git = \"{}\" rev = \"{}\"`",
                 ),
                 url, repo_url, rev
             ));
