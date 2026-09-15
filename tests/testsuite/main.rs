@@ -21,6 +21,7 @@ mod build_script_extra_link_arg;
 mod build_scripts_multiple;
 mod cache_lock;
 mod cache_messages;
+mod cache_probe;
 mod cargo;
 mod cargo_add;
 mod cargo_alias_config;

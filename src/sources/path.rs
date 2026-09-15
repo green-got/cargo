@@ -1135,7 +1135,7 @@ fn walk(path: &Path, callback: &mut dyn FnMut(&Path) -> CargoResult<bool>) -> Ca
 }
 
 fn has_manifest(path: &Path) -> bool {
-    find_project_manifest_exact(path, "Cargo.toml").is_ok()
+    path.join("Cargo.toml").exists()
 }
 
 fn read_nested_packages(

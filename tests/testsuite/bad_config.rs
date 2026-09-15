@@ -2368,10 +2368,9 @@ Caused by:
 Caused by:
   unable to update https://github.com/rust-lang/does-not-exist/pull/123
 ...
-  [NOTE] GitHub url https://github.com/rust-lang/does-not-exist/pull/123 is not a repository. 
-  [HELP] Replace the dependency with 
-         `git = "https://github.com/rust-lang/does-not-exist.git" rev = "refs/pull/123/head"` 
-     to specify pull requests as dependencies' revision.
+  [NOTE] GitHub url https://github.com/rust-lang/does-not-exist/pull/123 is not a repository
+  [HELP] to specify a pull request as a dependency, replace the dependency with:
+         `git = "https://github.com/rust-lang/does-not-exist.git" rev = "refs/pull/123/head"`
 ...
 "#]])
         .run();
@@ -3269,7 +3268,7 @@ fn bad_trim_paths() {
         .masquerade_as_nightly_cargo(&["trim-paths"])
         .with_status(101)
         .with_stderr_data(str![[r#"
-[ERROR] expected a boolean, "none", "diagnostics", "macro", "object", "all", or an array with these options
+[ERROR] unknown variant `split-debuginfo`, expected one of `none`, `object`, `all`
  --> Cargo.toml:8:30
   |
 8 |                 trim-paths = "split-debuginfo"

@@ -3,7 +3,9 @@
 use crate::util::data_structures::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
+use crate::cache_probe::{CandidateScore, ProbeCompletion, ProbeFailure, ProbeResult};
 use crate::compiler::compilation::{self, UnitOutput};
 use crate::compiler::locking::LockManager;
 use crate::compiler::{self, Unit, UserIntent, artifact};
@@ -143,48 +145,81 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
     pub(crate) fn probe_caches(
         bcx: &'a BuildContext<'a, 'gctx>,
         candidates: &[PathBuf],
-        deadline: std::time::Instant,
-    ) -> CargoResult<Vec<crate::cache_probe::CandidateScore>> {
+        deadline: Instant,
+    ) -> CargoResult<ProbeResult> {
         let mut mtime_cache = HashMap::default();
         let mut checksum_cache = HashMap::default();
         let lto = super::lto::generate(bcx)?;
+        let mut metas = None;
         let mut scores = Vec::new();
+        let mut candidate_elapsed = Vec::new();
+        let probe_result = |scores, candidate_elapsed, completion| ProbeResult {
+            scores,
+            completion,
+            resolution_elapsed: Duration::ZERO,
+            candidate_elapsed,
+        };
         for path in candidates {
-            anyhow::ensure!(path.is_absolute(), "invalid cache candidate");
-            anyhow::ensure!(
-                std::time::Instant::now() < deadline,
-                "cache probe deadline exceeded"
-            );
+            let candidate_start = Instant::now();
+            if should_stop_cache_probe(candidate_start, deadline, scores.len(), candidates.len())? {
+                return Ok(probe_result(
+                    scores,
+                    candidate_elapsed,
+                    ProbeCompletion::Deadline,
+                ));
+            }
             let mut runner = Self::new(bcx)?;
             runner.cache_probe_root = Some(path.clone());
             runner.mtime_cache = std::mem::take(&mut mtime_cache);
             runner.checksum_cache = std::mem::take(&mut checksum_cache);
             runner.lto = lto.clone();
-            runner.prepare_units()?;
+            runner.prepare_units_with_metadata(metas.take())?;
             custom_build::build_map(&mut runner)?;
             runner.compute_metadata_for_doc_units();
-            let mut fresh_units = 0;
-            let mut total_units = 0;
+            let mut score = CandidateScore {
+                fresh_units: 0,
+                total_units: 0,
+            };
             for unit in bcx.unit_graph.keys() {
-                anyhow::ensure!(
-                    std::time::Instant::now() < deadline,
-                    "cache probe deadline exceeded"
-                );
+                if should_stop_cache_probe(
+                    Instant::now(),
+                    deadline,
+                    scores.len(),
+                    candidates.len(),
+                )? {
+                    return Ok(probe_result(
+                        scores,
+                        candidate_elapsed,
+                        ProbeCompletion::Deadline,
+                    ));
+                }
                 if unit.mode.is_doc_test() {
                     continue;
                 }
-                total_units += 1;
-                fresh_units +=
-                    usize::from(super::fingerprint::probe_target(&mut runner, unit)?.is_none());
+                score.total_units += 1;
+                score.fresh_units += usize::from(super::fingerprint::probe_target_is_fresh(
+                    &mut runner,
+                    unit,
+                )?);
             }
-            scores.push(crate::cache_probe::CandidateScore {
-                fresh_units,
-                total_units,
-            });
+            scores.push(score);
+            candidate_elapsed.push(candidate_start.elapsed());
+            if score.is_perfect() {
+                return Ok(probe_result(
+                    scores,
+                    candidate_elapsed,
+                    ProbeCompletion::PerfectCandidate,
+                ));
+            }
+            metas = Some(std::mem::take(&mut runner.files.as_mut().unwrap().metas));
             mtime_cache = runner.mtime_cache;
             checksum_cache = runner.checksum_cache;
         }
-        Ok(scores)
+        Ok(probe_result(
+            scores,
+            candidate_elapsed,
+            ProbeCompletion::AllCandidates,
+        ))
     }
 
     /// Dry-run the compilation without actually running it.
@@ -464,6 +499,13 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
 
     #[tracing::instrument(skip_all)]
     pub fn prepare_units(&mut self) -> CargoResult<()> {
+        self.prepare_units_with_metadata(None)
+    }
+
+    fn prepare_units_with_metadata(
+        &mut self,
+        metas: Option<HashMap<Unit, Metadata>>,
+    ) -> CargoResult<()> {
         let dest = self.bcx.profiles.get_dir_name();
         // We try to only lock the artifact-dir if we need to.
         // For example, `cargo check` does not write any files to the artifact-dir so we don't need
@@ -511,7 +553,7 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
 
         self.record_units_requiring_metadata();
 
-        let files = CompilationFiles::new(self, host_layout, targets);
+        let files = CompilationFiles::new(self, host_layout, targets, metas);
         self.files = Some(files);
         Ok(())
     }
@@ -870,5 +912,47 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
             self.metadata_for_doc_units
                 .insert(unit.clone(), self.files().metadata(metadata_unit));
         }
+    }
+}
+
+fn should_stop_cache_probe(
+    now: Instant,
+    deadline: Instant,
+    completed_candidates: usize,
+    total_candidates: usize,
+) -> CargoResult<bool> {
+    if now < deadline {
+        return Ok(false);
+    }
+    if completed_candidates == 0 {
+        return Err(ProbeFailure::Deadline.into());
+    }
+    tracing::info!(
+        completed_candidates,
+        total_candidates,
+        "cache probe deadline exceeded; returning completed candidate prefix"
+    );
+    Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn cache_probe_deadline_preserves_completed_prefix() {
+        let now = Instant::now();
+        let deadline = now + Duration::from_secs(1);
+        assert!(!should_stop_cache_probe(now, deadline, 0, 3).unwrap());
+
+        let error = should_stop_cache_probe(now, now, 0, 3).unwrap_err();
+        assert_eq!(error.to_string(), "cache probe deadline exceeded");
+        assert_eq!(
+            error.downcast_ref::<ProbeFailure>(),
+            Some(&ProbeFailure::Deadline)
+        );
+
+        assert!(should_stop_cache_probe(now, now, 2, 3).unwrap());
     }
 }

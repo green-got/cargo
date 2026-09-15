@@ -832,7 +832,7 @@ enum LocalFingerprint {
     /// for us to look at. If any of those files are newer than this file then
     /// we need to recompile.
     ///
-    /// If the `checksum` bool is true then the `dep_info` file is expected to
+    /// If the `fingerprint` is [`FingerprintMethod::Content`] then the `dep_info` file is expected to
     /// contain file checksums instead of file mtimes.
     CheckDepInfo {
         dep_info: PathBuf,
@@ -978,7 +978,7 @@ impl LocalFingerprint {
                         if let Some(value) = gctx.env_config()?.get(key) {
                             value.to_str()
                         } else {
-                            gctx.get_env(key).ok()
+                            gctx.get_env_os(key).and_then(|value| value.to_str())
                         }
                     };
                     if current == previous.as_deref() {
@@ -1663,8 +1663,8 @@ fn calculate_normal(
                 build_runner
                     .bcx
                     .gctx
-                    .get_env(super::trim_paths::WS_REMAP_ENV)
-                    .ok()
+                    .get_env_os(super::trim_paths::WS_REMAP_ENV)
+                    .and_then(|value| value.to_str())
                     .filter(|prefix| !prefix.is_empty())
             }),
     ));
@@ -2016,24 +2016,70 @@ fn build_root(build_runner: &BuildRunner<'_, '_>) -> PathBuf {
         .unwrap_or_else(|| build_runner.bcx.ws.build_dir().into_path_unlocked())
 }
 
-pub(crate) fn probe_target(
+pub(crate) fn probe_target_is_fresh(
     build_runner: &mut BuildRunner<'_, '_>,
     unit: &Unit,
-) -> CargoResult<Option<DirtyReason>> {
+) -> CargoResult<bool> {
+    if build_runner.bcx.build_config.force_rebuild {
+        return Ok(false);
+    }
     let loc = build_runner.files().fingerprint_file_path(unit, "");
+    let Ok(old_hash) = std::fs::read_to_string(&loc) else {
+        return Ok(false);
+    };
     let fingerprint = calculate(build_runner, unit)?;
-    Ok(
-        match compare_old_fingerprint(
-            unit,
-            &loc,
-            &fingerprint,
-            false,
-            build_runner.bcx.build_config.force_rebuild,
-        ) {
-            FingerprintComparison::Fresh => None,
-            FingerprintComparison::Dirty { reason } => Some(reason),
-        },
-    )
+    Ok(probe_fingerprint_is_fresh(&old_hash, &fingerprint))
+}
+
+fn probe_fingerprint_is_fresh(old_hash: &str, fingerprint: &Fingerprint) -> bool {
+    fingerprint.fs_status.up_to_date() && old_hash == util::to_hex(fingerprint.hash_u64())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn probe_freshness_matches_normal_fingerprint_comparison() {
+        let temp = tempfile::tempdir().unwrap();
+        let old_hash_path = temp.path().join("fingerprint");
+        let mut old = Fingerprint::new();
+        old.rustc = 1;
+        write_fingerprint(&old_hash_path, &old).unwrap();
+
+        let mut fresh = Fingerprint::new();
+        fresh.rustc = 1;
+        fresh.fs_status = FsStatus::UpToDate {
+            mtimes: HashMap::default(),
+        };
+        assert_comparisons_match(&old_hash_path, &fresh, true);
+
+        let mut stale_filesystem = Fingerprint::new();
+        stale_filesystem.rustc = 1;
+        assert_comparisons_match(&old_hash_path, &stale_filesystem, false);
+
+        let mut changed = Fingerprint::new();
+        changed.rustc = 1;
+        changed.target = 1;
+        changed.fs_status = FsStatus::UpToDate {
+            mtimes: HashMap::default(),
+        };
+        assert_comparisons_match(&old_hash_path, &changed, false);
+
+        std::fs::remove_file(&old_hash_path).unwrap();
+        assert_comparisons_match(&old_hash_path, &fresh, false);
+    }
+
+    fn assert_comparisons_match(old_hash_path: &Path, fingerprint: &Fingerprint, expected: bool) {
+        let normal = matches!(
+            _compare_old_fingerprint(old_hash_path, fingerprint),
+            Ok(FingerprintComparison::Fresh)
+        );
+        let probe = std::fs::read_to_string(old_hash_path)
+            .is_ok_and(|old_hash| probe_fingerprint_is_fresh(&old_hash, fingerprint));
+        assert_eq!(probe, normal);
+        assert_eq!(normal, expected);
+    }
 }
 
 /// Reads the value from the old fingerprint hash file and compare.
